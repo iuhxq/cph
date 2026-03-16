@@ -184,7 +184,20 @@ const handleNewProblem = async (problem: Problem) => {
             problem: undefined,
         });
     }
-    const folder = vscode.workspace.workspaceFolders?.[0].uri.fsPath;
+
+    let folder: string | undefined;
+
+    // 1. 优先使用当前打开文件所在目录
+    const editor = vscode.window.activeTextEditor;
+    if (editor && editor.document.uri.scheme === 'file') {
+        folder = path.dirname(editor.document.uri.fsPath);
+    }
+
+    // 2. 如果没有打开文件，则退回到工作区根目录
+    if (!folder) {
+        folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    }
+
     if (folder === undefined) {
         vscode.window.showInformationMessage('Please open a folder first.');
         return;

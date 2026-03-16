@@ -1,59 +1,105 @@
 import path from 'path';
 import fs from 'fs';
+import * as vscode from 'vscode';
+import crypto from 'crypto';
 import { Problem } from './types';
 import { getSaveLocationPref } from './preferences';
-import crypto from 'crypto';
 
 /**
- *  Get the location (file path) to save the generated problem file in. If save
- *  location is available in preferences, returns that, otherwise returns the
- *  director of active file. The extension is `.prob`.
+ * 获取工作区根目录
+ */
+const getWorkspaceRoot = (): string | undefined => {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) {
+        return undefined;
+    }
+    return folders[0].uri.fsPath;
+};
+
+/**
+ * 获取 CPH 元数据存储根目录
  *
- *  @param srcPath location of the source code
+ * 规则：
+ * 1. saveLocation 为空：默认存到 工作区根目录/.cph
+ * 2. saveLocation 为绝对路径：直接使用
+ * 3. saveLocation 为相对路径：相对于工作区根目录
+ * 4. 如果没有工作区：退回到源码目录/.cph
+ */
+const getCphStorageRoot = (srcPath: string): string => {
+    const rawPref = getSaveLocationPref();
+    const savePreference =
+        typeof rawPref === 'string' ? rawPref.trim() : '';
+
+    const workspaceRoot = getWorkspaceRoot();
+    const srcFolder = path.dirname(srcPath);
+
+    // 未设置 saveLocation
+    if (savePreference === '') {
+        if (workspaceRoot) {
+            return path.join(workspaceRoot, '.cph');
+        }
+        return path.join(srcFolder, '.cph');
+    }
+
+    // 绝对路径
+    if (path.isAbsolute(savePreference)) {
+        return savePreference;
+    }
+
+    // 相对路径：相对于工作区根目录
+    if (workspaceRoot) {
+        return path.join(workspaceRoot, savePreference);
+    }
+
+    // 没有工作区时，退回源码目录
+    return path.join(srcFolder, savePreference);
+};
+
+/**
+ * 获取 .prob 文件保存路径
+ *
+ * 文件名格式：
+ * .<源码文件名>_<srcPath哈希>.prob
  */
 export const getProbSaveLocation = (srcPath: string): string => {
-    const savePreference = getSaveLocationPref();
     const srcFileName = path.basename(srcPath);
-    const srcFolder = path.dirname(srcPath);
     const hash = crypto
         .createHash('md5')
         .update(srcPath)
-        .digest('hex')
-        .substr(0);
+        .digest('hex');
+
     const baseProbName = `.${srcFileName}_${hash}.prob`;
-    const cphFolder = path.join(srcFolder, '.cph');
-    if (savePreference && savePreference !== '') {
-        return path.join(savePreference, baseProbName);
-    }
-    return path.join(cphFolder, baseProbName);
+    const storageRoot = getCphStorageRoot(srcPath);
+
+    return path.join(storageRoot, baseProbName);
 };
 
 /** Get the problem for a source, `null` if does not exist on the filesystem. */
 export const getProblem = (srcPath: string): Problem | null => {
     const probPath = getProbSaveLocation(srcPath);
-    let problem: string;
+
     try {
-        problem = fs.readFileSync(probPath).toString();
+        const problem = fs.readFileSync(probPath).toString();
         return JSON.parse(problem);
-    } catch (err) {
+    } catch {
         return null;
     }
 };
 
 /** Save the problem (metadata) */
 export const saveProblem = (srcPath: string, problem: Problem) => {
-    const srcFolder = path.dirname(srcPath);
-    const cphFolder = path.join(srcFolder, '.cph');
+    const storageRoot = getCphStorageRoot(srcPath);
 
-    if (getSaveLocationPref() === '' && !fs.existsSync(cphFolder)) {
-        globalThis.logger.log('Making .cph folder');
-        fs.mkdirSync(cphFolder);
+    if (!fs.existsSync(storageRoot)) {
+        globalThis.logger.log('Making CPH storage folder:', storageRoot);
+        fs.mkdirSync(storageRoot, { recursive: true });
     }
 
     const probPath = getProbSaveLocation(srcPath);
+
     try {
         fs.writeFileSync(probPath, JSON.stringify(problem));
     } catch (err) {
-        throw new Error(err as string);
+        throw new Error(String(err));
     }
 };
